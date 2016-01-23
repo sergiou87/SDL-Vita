@@ -97,6 +97,9 @@ static VideoBootStrap *bootstrap[] = {
 #if SDL_VIDEO_DRIVER_KMSDRM
     &KMSDRM_bootstrap,
 #endif
+#if SDL_VIDEO_DRIVER_VITA
+    &VITA_bootstrap,
+#endif
 #if SDL_VIDEO_DRIVER_RPI
     &RPI_bootstrap,
 #endif
@@ -280,7 +283,7 @@ SDL_CreateWindowTexture(SDL_VideoDevice *unused, SDL_Window * window, Uint32 * f
                 }
             }
         }
-        
+
         if (!renderer) {
             for (i = 0; i < SDL_GetNumRenderDrivers(); ++i) {
                 SDL_RendererInfo info;
@@ -1968,7 +1971,7 @@ SDL_GetWindowPosition(SDL_Window * window, int *x, int *y)
     /* Fullscreen windows are always at their display's origin */
     if (window->flags & SDL_WINDOW_FULLSCREEN) {
         int displayIndex;
-        
+
         if (x) {
             *x = 0;
         }
@@ -2331,7 +2334,7 @@ SDL_SetWindowFullscreen(SDL_Window * window, Uint32 flags)
     if (SDL_UpdateFullscreenMode(window, FULLSCREEN_VISIBLE(window)) == 0) {
         return 0;
     }
-    
+
     window->flags &= ~FULLSCREEN_MASK;
     window->flags |= oldflags;
     return -1;
@@ -2481,11 +2484,11 @@ SDL_SetWindowModalFor(SDL_Window * modal_window, SDL_Window * parent_window)
     if (!_this->SetWindowModalFor) {
         return SDL_Unsupported();
     }
-    
+
     return _this->SetWindowModalFor(_this, modal_window, parent_window);
 }
 
-int 
+int
 SDL_SetWindowInputFocus(SDL_Window * window)
 {
     CHECK_WINDOW_MAGIC(window, -1);
@@ -2493,7 +2496,7 @@ SDL_SetWindowInputFocus(SDL_Window * window)
     if (!_this->SetWindowInputFocus) {
         return SDL_Unsupported();
     }
-    
+
     return _this->SetWindowInputFocus(_this, window);
 }
 
