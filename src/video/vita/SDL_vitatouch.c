@@ -26,6 +26,7 @@
 #include <psp2/touch.h>
 
 #include "SDL_events.h"
+#include "SDL_hints.h"
 #include "SDL_log.h"
 #include "SDL_vitavideo.h"
 #include "SDL_vitatouch.h"
@@ -64,6 +65,8 @@ VITA_InitTouch(void)
 	// Support passing both front and back touch devices in events
 	SDL_AddTouch((SDL_TouchID)0, SDL_TOUCH_DEVICE_DIRECT, "Front");
 	SDL_AddTouch((SDL_TouchID)1, SDL_TOUCH_DEVICE_DIRECT, "Back");
+
+	SDL_SetHintWithPriority(SDL_HINT_TOUCH_MOUSE_EVENTS, "0", SDL_HINT_DEFAULT);
 }
 
 void 
