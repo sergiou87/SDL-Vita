@@ -47,30 +47,46 @@ extern int SDL_RecreateWindow(SDL_Window *window, Uint32 flags);
 
 static SDL_Renderer *VITA_CreateRenderer(SDL_Window *window, Uint32 flags);
 static void VITA_WindowEvent(SDL_Renderer *renderer, const SDL_WindowEvent *event);
+static SDL_bool VITA_SupportsBlendMode(SDL_Renderer * renderer, SDL_BlendMode blendMode);
 static int VITA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture);
 static int VITA_UpdateTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 	const SDL_Rect *rect, const void *pixels, int pitch);
+static int VITA_UpdateTextureYUV(SDL_Renderer * renderer, SDL_Texture * texture,
+                     const SDL_Rect * rect,
+                     const Uint8 *Yplane, int Ypitch,
+                     const Uint8 *Uplane, int Upitch,
+                     const Uint8 *Vplane, int Vpitch);
 static int VITA_LockTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 	const SDL_Rect *rect, void **pixels, int *pitch);
 static void VITA_UnlockTexture(SDL_Renderer *renderer,
 	 SDL_Texture *texture);
+static void VITA_SetTextureScaleMode(SDL_Renderer * renderer, SDL_Texture * texture, SDL_ScaleMode scaleMode);
 static int VITA_SetRenderTarget(SDL_Renderer *renderer,
 		 SDL_Texture *texture);
-static int VITA_UpdateViewport(SDL_Renderer *renderer);
+static int VITA_QueueSetViewport(SDL_Renderer * renderer, SDL_RenderCommand *cmd);
+static int VITA_QueueSetDrawColor(SDL_Renderer * renderer, SDL_RenderCommand *cmd);
 static int VITA_RenderClear(SDL_Renderer *renderer);
+static int VITA_QueueDrawPoints(SDL_Renderer * renderer, SDL_RenderCommand *cmd, const SDL_FPoint * points, int count);
 static int VITA_RenderDrawPoints(SDL_Renderer *renderer,
 		const SDL_FPoint *points, int count);
 static int VITA_RenderDrawLines(SDL_Renderer *renderer,
 		const SDL_FPoint *points, int count);
+static int VITA_QueueFillRects(SDL_Renderer * renderer, SDL_RenderCommand *cmd, const SDL_FRect * rects, int count);
 static int VITA_RenderFillRects(SDL_Renderer *renderer,
 		const SDL_FRect *rects, int count);
+static int VITA_QueueCopy(SDL_Renderer * renderer, SDL_RenderCommand *cmd, SDL_Texture * texture,
+                        	const SDL_Rect * srcrect, const SDL_FRect * dstrect);
 static int VITA_RenderCopy(SDL_Renderer *renderer, SDL_Texture *texture,
 	const SDL_Rect *srcrect, const SDL_FRect *dstrect);
+static int VITA_RunCommandQueue(SDL_Renderer * renderer, SDL_RenderCommand *cmd, void *vertices, size_t vertsize);
 static int VITA_RenderReadPixels(SDL_Renderer *renderer, const SDL_Rect *rect,
 	Uint32 pixel_format, void *pixels, int pitch);
-static int VITA_RenderCopyEx(SDL_Renderer *renderer, SDL_Texture *texture,
-	const SDL_Rect *srcrect, const SDL_FRect *dstrect,
-	const double angle, const SDL_FPoint *center, const SDL_RendererFlip flip);
+static int VITA_QueueCopyEx(SDL_Renderer * renderer, SDL_RenderCommand *cmd, SDL_Texture * texture,
+							const SDL_Rect * srcquad, const SDL_FRect * dstrect,
+							const double angle, const SDL_FPoint *center, const SDL_RendererFlip flip);
+// static int VITA_RenderCopyEx(SDL_Renderer *renderer, SDL_Texture *texture,
+// 	const SDL_Rect *srcrect, const SDL_FRect *dstrect,
+// 	const double angle, const SDL_FPoint *center, const SDL_RendererFlip flip);
 static void VITA_RenderPresent(SDL_Renderer *renderer);
 static void VITA_DestroyTexture(SDL_Renderer *renderer, SDL_Texture *texture);
 static void VITA_DestroyRenderer(SDL_Renderer *renderer);
@@ -124,18 +140,12 @@ typedef struct
 	unsigned int	h;
 } VITA_TextureData;
 
-
-static int
-GetScaleQuality(void)
+typedef struct
 {
-	const char *hint = SDL_GetHint(SDL_HINT_RENDER_SCALE_QUALITY);
+	SDL_Rect	srcRect;
+	SDL_FRect	dstRect;
+} VITA_CopyData;
 
-	if (!hint || *hint == '0' || SDL_strcasecmp(hint, "nearest") == 0) {
-		return SCE_GXM_TEXTURE_FILTER_POINT; // good for tile-map
-	} else {
-		return SCE_GXM_TEXTURE_FILTER_LINEAR; // good for scaling
-	}
-}
 
 /*
 static int
@@ -187,24 +197,27 @@ VITA_CreateRenderer(SDL_Window *window, Uint32 flags)
 		return NULL;
 	}
 
-
-	renderer->WindowEvent = VITA_WindowEvent;
-	renderer->CreateTexture = VITA_CreateTexture;
-	renderer->UpdateTexture = VITA_UpdateTexture;
-	renderer->LockTexture = VITA_LockTexture;
-	renderer->UnlockTexture = VITA_UnlockTexture;
-	renderer->SetRenderTarget = VITA_SetRenderTarget;
-	renderer->UpdateViewport = VITA_UpdateViewport;
-	renderer->RenderClear = VITA_RenderClear;
-	renderer->RenderDrawPoints = VITA_RenderDrawPoints;
-	renderer->RenderDrawLines = VITA_RenderDrawLines;
-	renderer->RenderFillRects = VITA_RenderFillRects;
-	renderer->RenderCopy = VITA_RenderCopy;
-	renderer->RenderReadPixels = VITA_RenderReadPixels;
-	renderer->RenderCopyEx = VITA_RenderCopyEx;
-	renderer->RenderPresent = VITA_RenderPresent;
-	renderer->DestroyTexture = VITA_DestroyTexture;
-	renderer->DestroyRenderer = VITA_DestroyRenderer;
+    renderer->WindowEvent = VITA_WindowEvent;
+    renderer->SupportsBlendMode = VITA_SupportsBlendMode;
+    renderer->CreateTexture = VITA_CreateTexture;
+    renderer->UpdateTexture = VITA_UpdateTexture;
+    renderer->UpdateTextureYUV = VITA_UpdateTextureYUV;
+    renderer->LockTexture = VITA_LockTexture;
+    renderer->UnlockTexture = VITA_UnlockTexture;
+    renderer->SetTextureScaleMode = VITA_SetTextureScaleMode;
+    renderer->SetRenderTarget = VITA_SetRenderTarget;
+    renderer->QueueSetViewport = VITA_QueueSetViewport;
+    renderer->QueueSetDrawColor = VITA_QueueSetDrawColor;
+    renderer->QueueDrawPoints = VITA_QueueDrawPoints;
+    renderer->QueueDrawLines = VITA_QueueDrawPoints;  // lines and points queue the same way.
+    renderer->QueueFillRects = VITA_QueueFillRects;
+    renderer->QueueCopy = VITA_QueueCopy;
+    renderer->QueueCopyEx = VITA_QueueCopyEx;
+    renderer->RunCommandQueue = VITA_RunCommandQueue;
+    renderer->RenderReadPixels = VITA_RenderReadPixels;
+    renderer->RenderPresent = VITA_RenderPresent;
+    renderer->DestroyTexture = VITA_DestroyTexture;
+    renderer->DestroyRenderer = VITA_DestroyRenderer;
 	renderer->info = VITA_RenderDriver.info;
 	renderer->info.flags = (SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
 	renderer->driverdata = data;
@@ -232,6 +245,11 @@ VITA_WindowEvent(SDL_Renderer *renderer, const SDL_WindowEvent *event)
 
 }
 
+static SDL_bool
+VITA_SupportsBlendMode(SDL_Renderer * renderer, SDL_BlendMode blendMode)
+{
+	return SDL_FALSE;
+}
 
 static int
 VITA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture)
@@ -249,14 +267,7 @@ VITA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture)
 		return SDL_OutOfMemory();
 	}
 
-	/* 
-	set texture filtering according to SDL_HINT_RENDER_SCALE_QUALITY
-	suported hint values are nearest (0, default) or linear (1)
-	scaleMode is either SCE_GXM_TEXTURE_FILTER_POINT (good for tile-map)
-	or SCE_GXM_TEXTURE_FILTER_LINEAR (good for scaling)
-	*/
-	int scaleMode = GetScaleQuality();
-	vita2d_texture_set_filters(vita_texture->tex, scaleMode, scaleMode); 
+	VITA_SetTextureScaleMode(renderer, texture, texture->scaleMode);
 
 	vita_texture->w = vita2d_texture_get_width(vita_texture->tex);
 	vita_texture->h = vita2d_texture_get_height(vita_texture->tex);
@@ -293,6 +304,16 @@ VITA_UpdateTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 	return 0;
 }
 
+static int 
+VITA_UpdateTextureYUV(SDL_Renderer * renderer, SDL_Texture * texture,
+                     const SDL_Rect * rect,
+                     const Uint8 *Yplane, int Ypitch,
+                     const Uint8 *Uplane, int Upitch,
+                     const Uint8 *Vplane, int Vpitch)
+{
+	return 0;
+}
+
 static int
 VITA_LockTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 				 const SDL_Rect *rect, void **pixels, int *pitch)
@@ -326,17 +347,40 @@ VITA_UnlockTexture(SDL_Renderer *renderer, SDL_Texture *texture)
 	*/
 }
 
+static void
+VITA_SetTextureScaleMode(SDL_Renderer * renderer, SDL_Texture * texture, SDL_ScaleMode scaleMode)
+{
+	VITA_TextureData *vita_texture = (VITA_TextureData *) texture->driverdata;
+
+	/* 
+	set texture filtering according to scaleMode
+	suported hint values are nearest (0, default) or linear (1)
+	vitaScaleMode is either SCE_GXM_TEXTURE_FILTER_POINT (good for tile-map)
+	or SCE_GXM_TEXTURE_FILTER_LINEAR (good for scaling)
+	*/
+	int vitaScaleMode = (scaleMode == SDL_ScaleModeNearest
+						? SCE_GXM_TEXTURE_FILTER_POINT 
+						: SCE_GXM_TEXTURE_FILTER_LINEAR);
+	vita2d_texture_set_filters(vita_texture->tex, vitaScaleMode, vitaScaleMode); 
+
+	return;
+}
+
 static int
 VITA_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture)
 {
-
 	return 0;
 }
 
 static int
-VITA_UpdateViewport(SDL_Renderer *renderer)
+VITA_QueueSetViewport(SDL_Renderer * renderer, SDL_RenderCommand *cmd)
 {
+	return 0;
+}
 
+static int
+VITA_QueueSetDrawColor(SDL_Renderer * renderer, SDL_RenderCommand *cmd)
+{
 	return 0;
 }
 
@@ -376,9 +420,6 @@ VITA_SetBlendMode(SDL_Renderer *renderer, int blendMode)
 static int
 VITA_RenderClear(SDL_Renderer *renderer)
 {
-	/* start list */
-	StartDrawing(renderer);
-
 	int color = renderer->a << 24 | renderer->b << 16 | renderer->g << 8 | renderer->r;
 	vita2d_set_clear_color(color);
 
@@ -388,15 +429,27 @@ VITA_RenderClear(SDL_Renderer *renderer)
 }
 
 static int
+VITA_QueueDrawPoints(SDL_Renderer * renderer, SDL_RenderCommand *cmd, const SDL_FPoint * points, int count)
+{
+    const size_t vertlen = (sizeof (float) * 2) * count;
+    float *verts = (float *) SDL_AllocateRenderVertices(renderer, vertlen, 0, &cmd->data.draw.first);
+    if (!verts) {
+        return -1;
+    }
+    cmd->data.draw.count = count;
+    SDL_memcpy(verts, points, vertlen);
+    return 0;
+}
+
+static int
 VITA_RenderDrawPoints(SDL_Renderer *renderer, const SDL_FPoint *points,
 					  int count)
 {
 	int color = renderer->a << 24 | renderer->b << 16 | renderer->g << 8 | renderer->r;
 	int i;
-	StartDrawing(renderer);
 
 	for (i = 0; i < count; ++i) {
-			vita2d_draw_pixel(points[i].x, points[i].y, color);
+		vita2d_draw_pixel(points[i].x, points[i].y, color);
 	}
 
 	return 0;
@@ -408,15 +461,29 @@ VITA_RenderDrawLines(SDL_Renderer *renderer, const SDL_FPoint *points,
 {
 	int color = renderer->a << 24 | renderer->b << 16 | renderer->g << 8 | renderer->r;
 	int i;
-	StartDrawing(renderer);
 
 	for (i = 0; i < count; ++i) {
-	if (i < count -1) {
-		vita2d_draw_line(points[i].x, points[i].y, points[i+1].x, points[i+1].y, color);
-	}
+		if (i < count -1) {
+			vita2d_draw_line(points[i].x, points[i].y, points[i+1].x, points[i+1].y, color);
+		}
 	}
 
 	return 0;
+}
+
+static int 
+VITA_QueueFillRects(SDL_Renderer * renderer, SDL_RenderCommand *cmd, const SDL_FRect * rects, int count)
+{
+    const size_t outLen = count * sizeof (SDL_FRect);
+    SDL_FRect *outRects = (SDL_FRect *) SDL_AllocateRenderVertices(renderer, outLen, 0, &cmd->data.draw.first);
+	
+    if (!outRects) {
+        return -1;
+    }
+    cmd->data.draw.count = count;
+    SDL_memcpy(outRects, rects, outLen);
+
+    return 0;
 }
 
 static int
@@ -425,7 +492,6 @@ VITA_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects,
 {
 	int color = renderer->a << 24 | renderer->b << 16 | renderer->g << 8 | renderer->r;
 	int i;
-	StartDrawing(renderer);
 
 	for (i = 0; i < count; ++i) {
 		const SDL_FRect *rect = &rects[i];
@@ -460,6 +526,23 @@ void Swap(float *a, float *b)
 	*b = n;
 }
 
+static int 
+VITA_QueueCopy(SDL_Renderer * renderer, SDL_RenderCommand *cmd, SDL_Texture * texture,
+                const SDL_Rect * srcrect, const SDL_FRect * dstrect)
+{
+    const size_t outLen = sizeof (VITA_CopyData);
+    VITA_CopyData *outData = (VITA_CopyData *) SDL_AllocateRenderVertices(renderer, outLen, 0, &cmd->data.draw.first);
+	
+    if (!outData) {
+        return -1;
+    }
+    cmd->data.draw.count = 1;
+    SDL_memcpy(&outData->srcRect, srcrect, sizeof(SDL_Rect));
+    SDL_memcpy(&outData->dstRect, dstrect, sizeof(SDL_FRect));
+
+    return 0;
+}
+
 static int
 VITA_RenderCopy(SDL_Renderer *renderer, SDL_Texture *texture,
 				const SDL_Rect *srcrect, const SDL_FRect *dstrect)
@@ -473,8 +556,6 @@ VITA_RenderCopy(SDL_Renderer *renderer, SDL_Texture *texture,
     
 	SDL_GetTextureColorMod(texture, &r, &g, &b);
 	SDL_GetTextureAlphaMod(texture, &a);
-
-	StartDrawing(renderer);
 
 	VITA_SetBlendMode(renderer, renderer->blendMode);
 
@@ -491,20 +572,99 @@ VITA_RenderCopy(SDL_Renderer *renderer, SDL_Texture *texture,
 }
 
 static int
+VITA_RunCommandQueue(SDL_Renderer * renderer, SDL_RenderCommand *cmd, void *vertices, size_t vertsize)
+{
+	StartDrawing(renderer);
+
+    while (cmd) {
+        switch (cmd->command) {
+            case SDL_RENDERCMD_SETDRAWCOLOR: {
+                break;
+            }
+
+            case SDL_RENDERCMD_SETVIEWPORT: {
+                break;
+            }
+
+            case SDL_RENDERCMD_SETCLIPRECT: {
+                break;
+            }
+
+            case SDL_RENDERCMD_CLEAR: {
+				VITA_RenderClear(renderer);
+                break;
+            }
+
+            case SDL_RENDERCMD_DRAW_POINTS: {
+                const size_t count = cmd->data.draw.count;
+                const size_t first = cmd->data.draw.first;
+				const SDL_FPoint *points = (SDL_FPoint *) (((Uint8 *) vertices) + first);
+				VITA_RenderDrawPoints(renderer, points, count);
+                break;
+            }
+
+            case SDL_RENDERCMD_DRAW_LINES: {
+                const size_t count = cmd->data.draw.count;
+                const size_t first = cmd->data.draw.first;
+                const SDL_FPoint *points = (SDL_FPoint *) (((Uint8 *) vertices) + first);
+
+				VITA_RenderDrawLines(renderer, points, count);
+                break;
+            }
+
+            case SDL_RENDERCMD_FILL_RECTS: {
+                const size_t count = cmd->data.draw.count;
+                const size_t first = cmd->data.draw.first;
+                const SDL_FRect *rects = (SDL_FRect *) (((Uint8 *) vertices) + first);
+
+				VITA_RenderFillRects(renderer, rects, count);
+                break;
+            }
+
+            case SDL_RENDERCMD_COPY: {
+                const size_t first = cmd->data.draw.first;
+                const VITA_CopyData *copyData = (VITA_CopyData *) (((Uint8 *) vertices) + first);
+
+				VITA_RenderCopy(renderer, cmd->data.draw.texture, &copyData->srcRect, &copyData->dstRect);
+                break;
+            }
+
+            case SDL_RENDERCMD_COPY_EX: {
+                break;
+            }
+
+            case SDL_RENDERCMD_NO_OP:
+                break;
+        }
+
+        cmd = cmd->next;
+    }
+
+    return 0;
+}
+
+static int
 VITA_RenderReadPixels(SDL_Renderer *renderer, const SDL_Rect *rect,
 					Uint32 pixel_format, void *pixels, int pitch)
-
 {
 		return 0;
 }
 
+static int
+VITA_QueueCopyEx(SDL_Renderer * renderer, SDL_RenderCommand *cmd, SDL_Texture * texture,
+				const SDL_Rect * srcquad, const SDL_FRect * dstrect,
+				const double angle, const SDL_FPoint *center, const SDL_RendererFlip flip)
+{
+	return 0;
+}
 
+/*
 static int
 VITA_RenderCopyEx(SDL_Renderer *renderer, SDL_Texture *texture,
 				const SDL_Rect *srcrect, const SDL_FRect *dstrect,
 				const double angle, const SDL_FPoint *center, const SDL_RendererFlip flip)
 {
-	/*float x, y, width, height;
+	float x, y, width, height;
 	float u0, v0, u1, v1;
 	unsigned char alpha;
 	float centerx, centery;
@@ -592,10 +752,9 @@ VITA_RenderCopyEx(SDL_Renderer *renderer, SDL_Texture *texture,
 
 	if(alpha != 255)
 		sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-	return 0;*/
-	return 1;
+	return 0;
 }
-
+*/
 static void
 VITA_RenderPresent(SDL_Renderer *renderer)
 {
