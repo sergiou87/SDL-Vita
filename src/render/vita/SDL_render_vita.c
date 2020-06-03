@@ -267,13 +267,13 @@ VITA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture)
 		return SDL_OutOfMemory();
 	}
 
+	texture->driverdata = vita_texture;
+
 	VITA_SetTextureScaleMode(renderer, texture, texture->scaleMode);
 
 	vita_texture->w = vita2d_texture_get_width(vita_texture->tex);
 	vita_texture->h = vita2d_texture_get_height(vita_texture->tex);
 	vita_texture->pitch = vita2d_texture_get_stride(vita_texture->tex);
-
-	texture->driverdata = vita_texture;
 
 	return 0;
 }
